@@ -33,10 +33,10 @@ class ImageBackbone(nn.Module):
         try:
             # ── Load pretrained ResNet50 ────────────────
             weights = (
-                models.ResNet50_Weights.DEFAULT
+                models.ResNet101_Weights.DEFAULT
                 if pretrained else None
             )
-            resnet = models.resnet50(weights=weights)
+            resnet = models.resnet101(weights=weights)
 
             # ── Encoder: break ResNet into stages ───────
             # Each stage reduces spatial size
