@@ -255,98 +255,61 @@ class OccupancyHead(nn.Module):
 # ──────────────────────────────────────────────────────
 # Loss functions (Eq 7 from FastOcc)
 # ──────────────────────────────────────────────────────
-
-def focal_loss(pred: torch.Tensor,
-               gt:   torch.Tensor,
-               gamma: float = 2.0,
-               alpha: float = 0.25
-               ) -> torch.Tensor:
-    """
-    Focal loss — Lf in Eq 7.
-
-    Handles class imbalance in occupancy:
-    most cells are empty (0), few are occupied (1).
-    Focal loss focuses training on hard examples.
-
-    alpha = 0.25 weights the positive class more
-    gamma = 2.0  down-weights easy examples
-    """
-    pred  = pred.clamp(1e-6, 1 - 1e-6)
-    pos   = -alpha * (1 - pred) ** gamma * gt * torch.log(pred)
-    neg   = -(1 - alpha) * pred ** gamma * (1 - gt) * torch.log(1 - pred)
-    return (pos + neg).mean()
+def _build_distance_weight_map(h, w, device):
+    """Near pixels = higher weight during training."""
+    cx = w // 2
+    cy = h // 2
+    ys = torch.arange(h, dtype=torch.float32, device=device)
+    xs = torch.arange(w, dtype=torch.float32, device=device)
+    yy, xx = torch.meshgrid(ys, xs, indexing='ij')
+    dist   = torch.sqrt((xx-cx)**2 + (yy-cy)**2).clamp(1e-6)
+    weight = 1.0 / dist
+    weight = weight / weight.mean()  # normalize to mean=1
+    return weight  # (H, W)
 
 
-def lovasz_loss(pred: torch.Tensor,
-                gt:   torch.Tensor
-                ) -> torch.Tensor:
-    """
-    Simplified Lovász-softmax loss — Lls in Eq 7.
+def focal_loss(pred, gt, gamma=2.0, alpha=0.25):
+    """Distance-weighted focal loss."""
+    pred   = pred.clamp(1e-6, 1-1e-6)
+    pos    = -alpha * (1-pred)**gamma * gt * torch.log(pred)
+    neg    = -(1-alpha) * pred**gamma * (1-gt) * torch.log(1-pred)
+    loss   = pos + neg  # (B,1,H,W)
 
-    Directly optimizes IoU — exactly what the
-    hackathon judges measure (Occupancy IoU).
+    B, C, H, W = loss.shape
+    weight = _build_distance_weight_map(H, W, pred.device)
+    weight = weight.unsqueeze(0).unsqueeze(0)
+    loss   = loss * weight
 
-    This loss makes the model directly optimize
-    the metric we care about!
-    """
-    pred  = pred.view(-1)
-    gt    = gt.view(-1)
-
-    # IoU-based loss
-    tp    = (pred * gt).sum()
-    fp    = (pred * (1 - gt)).sum()
-    fn    = ((1 - pred) * gt).sum()
-
-    iou   = tp / (tp + fp + fn + 1e-6)
-    return 1.0 - iou
+    return loss.mean()
 
 
-def bev_loss(pred: torch.Tensor,
-             gt:   torch.Tensor
-             ) -> torch.Tensor:
-    """
-    Binary cross-entropy on BEV — Lb in Eq 7.
-    Auxiliary supervision on the BEV feature map.
-    """
+def lovasz_loss(pred, gt):
+    """Directly optimizes IoU."""
+    pred = pred.view(-1)
+    gt   = gt.view(-1)
+    tp   = (pred * gt).sum()
+    fp   = (pred * (1-gt)).sum()
+    fn   = ((1-pred) * gt).sum()
+    return 1.0 - tp / (tp + fp + fn + 1e-6)
+
+
+
+def bev_loss(pred, gt):
     return F.binary_cross_entropy(pred, gt)
 
 
-def total_occupancy_loss(
-        pred:     torch.Tensor,
-        gt:       torch.Tensor,
-        bev_aux:  torch.Tensor = None,
-        bev_gt:   torch.Tensor = None
-) -> dict:
-    """
-    Combined loss from Eq 7:
-    Loss = Lf + Lls + Lb
-
-    We use the 3 most relevant terms for
-    binary 2D occupancy prediction.
-
-    Args:
-        pred:    (B, 1, H, W) final prediction
-        gt:      (B, 1, H, W) ground truth
-        bev_aux: (B, 1, H, W) auxiliary BEV prediction
-        bev_gt:  (B, 1, H, W) auxiliary BEV ground truth
-
-    Returns:
-        dict with individual losses + total
-    """
+def total_occupancy_loss(pred, gt, bev_aux=None, bev_gt=None):
     Lf   = focal_loss(pred, gt)
     Lls  = lovasz_loss(pred, gt)
     Lb   = bev_loss(pred, gt)
 
-    # Auxiliary BEV supervision (Lb from paper)
     Lb_aux = torch.tensor(0.0, device=pred.device)
     if bev_aux is not None and bev_gt is not None:
-        bev_gt_resized = F.interpolate(
-            bev_gt,
-            size          = bev_aux.shape[-2:],
-            mode          = 'bilinear',
-            align_corners = False
+        bev_gt_r = F.interpolate(
+            bev_gt, size=bev_aux.shape[-2:],
+            mode='bilinear', align_corners=False
         )
-        Lb_aux = bev_loss(bev_aux, bev_gt_resized)
+        Lb_aux = bev_loss(bev_aux, bev_gt_r)
 
     total = Lf + Lls + Lb + 0.5 * Lb_aux
 

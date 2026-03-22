@@ -45,26 +45,24 @@ class BEVOccupancyDataset(Dataset):
     """
 
     def __init__(self,
-                 dataroot: str  = DATAROOT,
-                 version:  str  = VERSION):
+             dataroot: str  = DATAROOT,
+             version:  str  = VERSION,
+             is_train: bool = True):   # ← ADD THIS
         try:
-            # ── Load nuScenes ───────────────────────────
-            self.nusc = NuScenes(
-                version  = version,
-                dataroot = dataroot,
-                verbose  = False
+            self.nusc     = NuScenes(
+                version=version, dataroot=dataroot, verbose=False
             )
-            self.samples = self.nusc.sample
+            self.samples  = self.nusc.sample
+            self.is_train = is_train   # ← ADD THIS
 
             logger.info(
                 f"Dataset loaded | "
-                f"version: {version} | "
-                f"samples: {len(self.samples)}"
+                f"samples: {len(self.samples)} | "
+                f"mode: {'train' if is_train else 'val'}"
             )
-
         except Exception as e:
             raise BEVException(
-                "Failed to initialize BEVOccupancyDataset", e
+                "Failed to init dataset", e
             ) from e
 
     def __len__(self) -> int:
@@ -109,45 +107,36 @@ class BEVOccupancyDataset(Dataset):
     # Private helpers
     # ──────────────────────────────────────────────────
 
-    def _load_camera(self, sample: dict, cam_name: str):
-        """
-        Load and preprocess one camera's image + calibration.
-
-        Returns:
-            img : tensor (3, IMG_H, IMG_W)
-            K   : tensor (3, 3)
-            E   : tensor (4, 4)
-        """
-        # Get camera data from nuScenes
-        cam_token  = sample['data'][cam_name]
-        cam_data   = self.nusc.get('sample_data', cam_token)
-        calib      = self.nusc.get(
+    def _load_camera(self, sample, cam_name):
+        cam_token = sample['data'][cam_name]
+        cam_data  = self.nusc.get('sample_data', cam_token)
+        calib     = self.nusc.get(
             'calibrated_sensor',
             cam_data['calibrated_sensor_token']
         )
 
-        # Full path to image file
         img_path = os.path.join(
-            self.nusc.dataroot,
-            cam_data['filename']
+            self.nusc.dataroot, cam_data['filename']
         )
 
-        # Preprocess using functions from preprocess.py
         img = preprocess_image(img_path)
 
-        K   = preprocess_intrinsic(
-            calib['camera_intrinsic'],
-            orig_w = cam_data['width'],
-            orig_h = cam_data['height']
-        )
+        # Apply augmentation during training
+        if self.is_train:
+            from data.preprocess import augment_image
+            img = augment_image(img, is_train=True)
 
-        E   = preprocess_extrinsic(
+        K = preprocess_intrinsic(
+            calib['camera_intrinsic'],
+            orig_w=cam_data['width'],
+            orig_h=cam_data['height']
+        )
+        E = preprocess_extrinsic(
             calib['rotation'],
             calib['translation']
         )
-
         return img, K, E
-
+    
     def _load_lidar_bev(self, sample: dict) -> torch.Tensor:
         """
         Load LiDAR scan and convert to 2D BEV occupancy grid.
@@ -183,63 +172,33 @@ class BEVOccupancyDataset(Dataset):
 # DataLoader factory function
 # ──────────────────────────────────────────────────────
 
-def get_dataloaders(
-    dataroot: str = DATAROOT,
-    version:  str = VERSION
-):
-    """
-    Creates train and validation DataLoaders.
+def get_dataloaders(dataroot=DATAROOT, version=VERSION):
+    full_dataset = BEVOccupancyDataset(
+        dataroot=dataroot, version=version, is_train=True
+    )
 
-    Returns:
-        train_loader: DataLoader
-        val_loader:   DataLoader
-        train_size:   int
-        val_size:     int
-    """
-    try:
-        # Create full dataset
-        full_dataset = BEVOccupancyDataset(
-            dataroot = dataroot,
-            version  = version
-        )
+    total      = len(full_dataset)
+    train_size = int(TRAIN_SPLIT * total)
+    val_size   = total - train_size
 
-        # Split into train / val
-        total      = len(full_dataset)
-        train_size = int(TRAIN_SPLIT * total)
-        val_size   = total - train_size
+    train_ds, val_ds = random_split(
+        full_dataset, [train_size, val_size],
+        generator=torch.Generator().manual_seed(42)
+    )
 
-        train_ds, val_ds = random_split(
-            full_dataset,
-            [train_size, val_size],
-            generator = torch.Generator().manual_seed(42)
-        )
+    # Val set should NOT augment
+    val_ds.dataset.is_train = False
 
-        # Create loaders
-        train_loader = DataLoader(
-            train_ds,
-            batch_size  = BATCH_SIZE,
-            shuffle     = True,
-            num_workers = NUM_WORKERS,
-            pin_memory  = False
-        )
+    train_loader = DataLoader(
+        train_ds, batch_size=BATCH_SIZE,
+        shuffle=True, num_workers=NUM_WORKERS
+    )
+    val_loader = DataLoader(
+        val_ds, batch_size=BATCH_SIZE,
+        shuffle=False, num_workers=NUM_WORKERS
+    )
 
-        val_loader = DataLoader(
-            val_ds,
-            batch_size  = BATCH_SIZE,
-            shuffle     = False,
-            num_workers = NUM_WORKERS,
-            pin_memory  = False
-        )
-
-        logger.info(
-            f"DataLoaders ready | "
-            f"train: {train_size} | "
-            f"val: {val_size}"
-        )
-
-        return train_loader, val_loader, train_size, val_size
-
-    except Exception as e:
-        raise BEVException(
-            "Failed to create DataLoaders", e
-        ) from e
+    logger.info(
+        f"DataLoaders | train: {train_size} | val: {val_size}"
+    )
+    return train_loader, val_loader, train_size, val_size
