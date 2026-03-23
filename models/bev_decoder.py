@@ -3,13 +3,15 @@
 # BEV Decoder + Occupancy Head
 # Based on FastOcc paper — Eq 3, 4, 5, 7
 #
-# Key idea: replace 3D conv with 2D FCN
-# Speedup: k × Z times faster (Eq 5)
-# For k=3, Z=8 → 24× faster than 3D conv
+# CRITICAL DESIGN CONTRACT (read before editing):
+#   ALL heads output RAW LOGITS (no sigmoid).
+#   sigmoid is applied ONLY inside loss functions.
+#   This is numerically stable and avoids double-sigmoid.
 #
-# HACKATHON OUTPUT:
-#   2D grid where each pixel = P(occupied)
-#   pixel size = 0.4m × 0.4m real world
+# ARCHITECTURE:
+#   BEVDecoder:    (B, 128, 200, 200) → (B, 64, 200, 200)
+#   OccupancyHead: (B,  64, 200, 200) → (B,  1, 200, 200)  ← raw logits
+#   bev_aux_head:  (B,  64, 200, 200) → (B,  1, 200, 200)  ← raw logits
 # ══════════════════════════════════════════════════════
 
 import torch
@@ -27,7 +29,7 @@ logger = CustomLogger().get_logger(__name__)
 
 
 # ──────────────────────────────────────────────────────
-# Building blocks
+# Building block
 # ──────────────────────────────────────────────────────
 
 class ConvBnReLU(nn.Module):
@@ -58,302 +60,239 @@ class BEVDecoder(nn.Module):
     """
     FastOcc 2D FCN Decoder.
 
-    Implements the core FastOcc idea:
-    Instead of 3D convolutions over (H,W,Z),
-    we collapse Z into the channel dimension
-    and decode entirely in 2D.
-
+    FLOPs (Eq 4): Cin × k² × Cout × H × W
+    vs 3D (Eq 3): Cin × k³ × Cout × H × W × Z
     Speedup (Eq 5): sj = k × Zj
-    For k=3, Z=8 → 24× faster than 3D conv!
 
-    Input:  bev_feat (B, C, BEV_H, BEV_W)
-    Output: decoded  (B, BEV_CHANNELS, BEV_H*2, BEV_W*2)
+    Input:  (B, IMG_CHANNELS=128, 200, 200)
+    Output: (B, BEV_CHANNELS=64,  200, 200)
+
+    NOTE: No upsampling here — our BEV grid is already
+    at target resolution (200×200). Upsampling then
+    resizing back would waste compute with zero gain.
     """
 
     def __init__(self,
-                 in_channels:  int = IMG_CHANNELS,
-                 out_channels: int = BEV_CHANNELS):
+                 in_channels:  int = IMG_CHANNELS,   # 128
+                 out_channels: int = BEV_CHANNELS):   # 64
         super().__init__()
 
         try:
-            # ── 2D FCN decoder ────────────────────────────
-            # FLOPs = C_in × k² × C_out × H × W  (Eq 4)
-            # Much cheaper than 3D version (Eq 3)
             self.decoder = nn.Sequential(
-                # Block 1: reduce channels
-                ConvBnReLU(in_channels, 256),
-                ConvBnReLU(256, 128),
-
-                # Upsample ×2 (restore spatial resolution)
-                nn.Upsample(
-                    scale_factor=2,
-                    mode='bilinear',
-                    align_corners=False
-                ),
-
-                # Block 2: refine features
+                # Step down: 128 → 128
+                ConvBnReLU(in_channels, 128),
+                ConvBnReLU(128, 128),
+                # Compress: 128 → 64
                 ConvBnReLU(128, out_channels),
                 ConvBnReLU(out_channels, out_channels),
             )
-
-            # ── BEV auxiliary head ────────────────────────
-            # Eq 7: Lb = BEV binary cross-entropy loss
-            # Provides extra supervision signal during train
-            self.bev_aux_head = nn.Sequential(
-                ConvBnReLU(out_channels, 32),
-                nn.Conv2d(32, 1, kernel_size=1),
-                nn.Sigmoid()
-            )
+            # Output: (B, 64, 200, 200)
 
             logger.info(
                 f"BEVDecoder initialized | "
-                f"in: {in_channels} → out: {out_channels} | "
-                f"upsamples 2× using 2D FCN (FastOcc)"
+                f"{in_channels} → {out_channels} channels | "
+                f"2D FCN (no upsample, stays at 200×200)"
             )
 
         except Exception as e:
-            raise BEVException(
-                "Failed to init BEVDecoder", e
-            ) from e
+            raise BEVException("Failed to init BEVDecoder", e) from e
 
     def forward(self, bev_feat: torch.Tensor):
         """
-        Args:
-            bev_feat: (B, C, BEV_H, BEV_W)
-
-        Returns:
-            decoded:  (B, BEV_CHANNELS, BEV_H*2, BEV_W*2)
-            bev_aux:  (B, 1, BEV_H*2, BEV_W*2)
-                      auxiliary BEV prediction for Lb loss
+        Args:  bev_feat: (B, 128, 200, 200)
+        Returns: decoded: (B, 64, 200, 200)
         """
         try:
-            decoded = self.decoder(bev_feat)
-            bev_aux = self.bev_aux_head(decoded)
-
-            return decoded, bev_aux
-
+            return self.decoder(bev_feat)
         except Exception as e:
-            raise BEVException(
-                "BEVDecoder forward failed", e
-            ) from e
+            raise BEVException("BEVDecoder forward failed", e) from e
 
 
 # ──────────────────────────────────────────────────────
-# Occupancy Head (Final prediction)
+# Occupancy Head
 # ──────────────────────────────────────────────────────
 
 class OccupancyHead(nn.Module):
     """
     Final occupancy prediction head.
 
-    Implements FastOcc's feature integration:
-        1. Take decoded BEV features
-        2. Add interpolated image features
-           (compensates for missing Z-axis info)
-        3. Predict final occupancy probability
+    INPUT CHANGE FROM OLD VERSION:
+        Old: takes (bev_decoded, img_feat_interp) — two inputs
+        New: takes (bev_decoded) only — one input
 
-    Input:
-        bev_decoded:    (B, BEV_CHANNELS, H, W)
-        img_feat_interp:(B, IMG_CHANNELS, H, W)
+    WHY: Fusing camera-averaged image features into BEV
+    is geometrically meaningless. A front-camera pixel at
+    (u,v) has no spatial relationship to a BEV cell at (row,col).
+    The BEVFormerLite view transformer already embeds geometry-correct
+    image features into BEV. Re-injecting raw averaged image
+    features adds noise, not information.
 
-    Output:
-        occupancy: (B, 1, BEV_H, BEV_W)
-                   sigmoid output = P(occupied)
-                   this is the final 2D BEV grid!
+    CRITICAL: Output is RAW LOGITS. No sigmoid.
+    sigmoid is applied inside loss functions only.
+
+    Input:  (B, BEV_CHANNELS=64, 200, 200)
+    Output: (B, 1, 200, 200)  ← raw logits, NOT probabilities
     """
 
-    def __init__(self,
-                 bev_channels: int = BEV_CHANNELS,
-                 img_channels: int = IMG_CHANNELS):
+    def __init__(self, bev_channels: int = BEV_CHANNELS):  # 64
         super().__init__()
 
         try:
-            # ── Feature fusion ────────────────────────────
-            # Fuse 2D BEV + interpolated 3D image features
-            # This restores Z-axis information lost in 2D
-            self.fuse = nn.Sequential(
-                ConvBnReLU(
-                    bev_channels + img_channels, 128
-                ),
-                ConvBnReLU(128, 64)
+            # Main prediction path
+            self.predict = nn.Sequential(
+                ConvBnReLU(bev_channels, 32),
+                ConvBnReLU(32, 32),
+                nn.Conv2d(32, 1, kernel_size=1)
+                # ← NO nn.Sigmoid() here — outputs raw logits
             )
 
-            # ── Final occupancy prediction ────────────────
-            # Output: probability map P(occupied)
-            # sigmoid → values in [0, 1]
-            # This is the 2D BEV grid the hackathon asks for
-            self.predict = nn.Sequential(
-                ConvBnReLU(64, 32),
-                nn.Conv2d(32, 1, kernel_size=1),
-                nn.Sigmoid()
+            # Auxiliary BEV head — also raw logits
+            # Used for Lb auxiliary supervision (FastOcc Eq 7)
+            self.aux_head = nn.Sequential(
+                ConvBnReLU(bev_channels, 32),
+                nn.Conv2d(32, 1, kernel_size=1)
+                # ← NO nn.Sigmoid() here either
             )
 
             logger.info(
                 f"OccupancyHead initialized | "
-                f"fuses BEV({bev_channels}ch) + "
-                f"img({img_channels}ch) → 1 channel"
+                f"input: {bev_channels}ch → output: 1ch logits"
             )
 
         except Exception as e:
-            raise BEVException(
-                "Failed to init OccupancyHead", e
-            ) from e
+            raise BEVException("Failed to init OccupancyHead", e) from e
 
-    def forward(self,
-                bev_decoded:     torch.Tensor,
-                img_feat_interp: torch.Tensor
-                ) -> torch.Tensor:
+    def forward(self, bev_decoded: torch.Tensor):
         """
         Args:
-            bev_decoded:     (B, BEV_CHANNELS, H, W)
-            img_feat_interp: (B, IMG_CHANNELS, H, W)
+            bev_decoded: (B, 64, 200, 200)
 
         Returns:
-            occupancy: (B, 1, BEV_H, BEV_W)
+            occ_logits: (B, 1, 200, 200)  ← raw logits
+            aux_logits: (B, 1, 200, 200)  ← raw logits (for aux loss)
         """
         try:
-            # Resize image features to match BEV size
-            img_feat_interp = F.interpolate(
-                img_feat_interp,
-                size          = bev_decoded.shape[-2:],
-                mode          = 'bilinear',
-                align_corners = False
-            )
+            occ_logits = self.predict(bev_decoded)   # (B, 1, 200, 200)
+            aux_logits = self.aux_head(bev_decoded)  # (B, 1, 200, 200)
 
-            # Concatenate BEV + image features
-            fused = torch.cat(
-                [bev_decoded, img_feat_interp], dim=1
-            )
-
-            # Fuse and predict
-            fused = self.fuse(fused)
-            occ   = self.predict(fused)
-
-            # Resize to fixed BEV output size
-            # Ensures output always matches ground truth
-            occ = F.interpolate(
-                occ,
-                size          = (BEV_H, BEV_W),
-                mode          = 'bilinear',
-                align_corners = False
-            )
-
-            logger.info(
-                f"OccupancyHead forward | "
-                f"output: {tuple(occ.shape)} | "
-                f"range: [{occ.min():.3f}, {occ.max():.3f}]"
-            )
-
-            return occ  # (B, 1, BEV_H, BEV_W)
+            return occ_logits, aux_logits
 
         except Exception as e:
-            raise BEVException(
-                "OccupancyHead forward failed", e
-            ) from e
+            raise BEVException("OccupancyHead forward failed", e) from e
 
 
 # ──────────────────────────────────────────────────────
-# Loss functions (Eq 7 from FastOcc)
+# Loss Functions (Eq 7 from FastOcc)
+# ALL functions accept RAW LOGITS, not probabilities
 # ──────────────────────────────────────────────────────
 
-def focal_loss(pred: torch.Tensor,
-               gt:   torch.Tensor,
-               gamma: float = 2.0,
-               alpha: float = 0.25
-               ) -> torch.Tensor:
+def focal_loss(
+    pred_logits: torch.Tensor,  # (B, 1, H, W) — raw logits, NO sigmoid applied yet
+    gt:          torch.Tensor,  # (B, 1, H, W) — binary {0.0, 1.0}
+    gamma:       float = 2.0,
+    alpha:       float = 0.75   # 0.75 = weight for POSITIVE class (occupied = minority ~5%)
+) -> torch.Tensor:
     """
-    Focal loss — Lf in Eq 7.
+    Focal Loss — handles class imbalance.
+    alpha=0.75 means occupied cells get 3× more weight than empty cells.
+    gamma=2.0 down-weights easy negatives (vast empty BEV space).
 
-    Handles class imbalance in occupancy:
-    most cells are empty (0), few are occupied (1).
-    Focal loss focuses training on hard examples.
-
-    alpha = 0.25 weights the positive class more
-    gamma = 2.0  down-weights easy examples
+    CORRECT alpha semantics:
+        alpha_t = 0.75 for gt=1 (occupied — minority, hard to learn)
+        alpha_t = 0.25 for gt=0 (empty   — majority, easy, down-weight)
     """
-    pred  = pred.clamp(1e-6, 1 - 1e-6)
-    pos   = -alpha * (1 - pred) ** gamma * gt * torch.log(pred)
-    neg   = -(1 - alpha) * pred ** gamma * (1 - gt) * torch.log(1 - pred)
-    return (pos + neg).mean()
+    # Apply sigmoid HERE — once. Not in the head.
+    pred = torch.sigmoid(pred_logits)
+    pred = pred.clamp(1e-6, 1.0 - 1e-6)  # numerical stability
+
+    # Per-cell alpha: 0.75 for positives, 0.25 for negatives
+    alpha_t = alpha * gt + (1.0 - alpha) * (1.0 - gt)
+
+    # Standard cross-entropy then modulate with focal weight
+    bce   = -(gt * torch.log(pred) + (1.0 - gt) * torch.log(1.0 - pred))
+    pt    = torch.exp(-bce)                             # pt = 1 if easy, 0 if hard
+    focal = alpha_t * (1.0 - pt) ** gamma * bce        # hard examples get full weight
+
+    return focal.mean()
 
 
-def lovasz_loss(pred: torch.Tensor,
-                gt:   torch.Tensor
-                ) -> torch.Tensor:
+def dice_loss(
+    pred_logits: torch.Tensor,  # (B, 1, H, W) — raw logits
+    gt:          torch.Tensor   # (B, 1, H, W) — binary {0.0, 1.0}
+) -> torch.Tensor:
     """
-    Simplified Lovász-softmax loss — Lls in Eq 7.
+    Soft Dice Loss — directly optimizes overlap (≈ IoU).
 
-    Directly optimizes IoU — exactly what the
-    hackathon judges measure (Occupancy IoU).
+    This is what you are actually evaluated on.
+    Focal loss handles class imbalance;
+    Dice loss handles spatial structure quality.
 
-    This loss makes the model directly optimize
-    the metric we care about!
+    Uses smooth=1e-6 (NOT +1) to avoid fake perfect scores
+    on all-zero predictions against all-zero GT.
     """
-    pred  = pred.view(-1)
-    gt    = gt.view(-1)
+    pred   = torch.sigmoid(pred_logits)
+    smooth = 1e-6
 
-    # IoU-based loss
-    tp    = (pred * gt).sum()
-    fp    = (pred * (1 - gt)).sum()
-    fn    = ((1 - pred) * gt).sum()
+    # Sum over all spatial dims per batch item → shape (B,)
+    intersection = (pred * gt).sum(dim=[1, 2, 3])
+    union        = pred.sum(dim=[1, 2, 3]) + gt.sum(dim=[1, 2, 3])
 
-    iou   = tp / (tp + fp + fn + 1e-6)
-    return 1.0 - iou
+    dice = 1.0 - (2.0 * intersection + smooth) / (union + smooth)
+    return dice.mean()
 
 
-def bev_loss(pred: torch.Tensor,
-             gt:   torch.Tensor
-             ) -> torch.Tensor:
+def aux_bce_loss(
+    aux_logits: torch.Tensor,  # (B, 1, H, W) — raw logits from aux_head
+    gt:         torch.Tensor   # (B, 1, H, W) — binary GT
+) -> torch.Tensor:
     """
-    Binary cross-entropy on BEV — Lb in Eq 7.
-    Auxiliary supervision on the BEV feature map.
+    Auxiliary BEV supervision — Lb from FastOcc Eq 7.
+    Uses BCEWithLogits which is numerically stable
+    (combines sigmoid + BCE in one stable operation).
     """
-    return F.binary_cross_entropy(pred, gt)
+    return F.binary_cross_entropy_with_logits(aux_logits, gt)
 
 
 def total_occupancy_loss(
-        pred:     torch.Tensor,
-        gt:       torch.Tensor,
-        bev_aux:  torch.Tensor = None,
-        bev_gt:   torch.Tensor = None
+    occ_logits:  torch.Tensor,           # (B, 1, H, W) main head raw logits
+    gt:          torch.Tensor,           # (B, 1, H, W) binary ground truth
+    aux_logits:  torch.Tensor = None,    # (B, 1, H, W) aux head raw logits
+    focal_w:     float = 1.0,
+    dice_w:      float = 1.0,
+    aux_w:       float = 0.5
 ) -> dict:
     """
-    Combined loss from Eq 7:
-    Loss = Lf + Lls + Lb
+    Combined loss — FastOcc Eq 7:
+        Loss = Lf (focal) + Ldice + 0.5 * Lb (aux BCE)
 
-    We use the 3 most relevant terms for
-    binary 2D occupancy prediction.
+    All inputs are RAW LOGITS.
+    sigmoid is applied inside each sub-loss.
 
     Args:
-        pred:    (B, 1, H, W) final prediction
-        gt:      (B, 1, H, W) ground truth
-        bev_aux: (B, 1, H, W) auxiliary BEV prediction
-        bev_gt:  (B, 1, H, W) auxiliary BEV ground truth
+        occ_logits:  main head output   (B, 1, 200, 200)
+        gt:          LiDAR occupancy GT (B, 1, 200, 200)
+        aux_logits:  aux head output    (B, 1, 200, 200) or None
 
     Returns:
-        dict with individual losses + total
+        dict: {
+            'total':   scalar — backprop this
+            'focal':   scalar — for logging
+            'dice':    scalar — for logging
+            'aux_bce': scalar — for logging
+        }
     """
-    Lf   = focal_loss(pred, gt)
-    Lls  = lovasz_loss(pred, gt)
-    Lb   = bev_loss(pred, gt)
+    Lf   = focal_loss(occ_logits, gt) * focal_w
+    Ld   = dice_loss(occ_logits, gt)  * dice_w
 
-    # Auxiliary BEV supervision (Lb from paper)
-    Lb_aux = torch.tensor(0.0, device=pred.device)
-    if bev_aux is not None and bev_gt is not None:
-        bev_gt_resized = F.interpolate(
-            bev_gt,
-            size          = bev_aux.shape[-2:],
-            mode          = 'bilinear',
-            align_corners = False
-        )
-        Lb_aux = bev_loss(bev_aux, bev_gt_resized)
+    Lb   = torch.tensor(0.0, device=occ_logits.device)
+    if aux_logits is not None:
+        Lb = aux_bce_loss(aux_logits, gt) * aux_w
 
-    total = Lf + Lls + Lb + 0.5 * Lb_aux
+    total = Lf + Ld + Lb
 
     return {
         'total'  : total,
-        'focal'  : Lf,
-        'lovasz' : Lls,
-        'bce'    : Lb,
-        'bev_aux': Lb_aux
+        'focal'  : Lf.detach(),
+        'dice'   : Ld.detach(),
+        'aux_bce': Lb.detach() if isinstance(Lb, torch.Tensor) else Lb
     }

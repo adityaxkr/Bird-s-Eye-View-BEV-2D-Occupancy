@@ -33,3 +33,4 @@ dataset/
 checkpoints/*.pth
 checkpoints/*.pt
 checkpoints/
+logs/

@@ -172,73 +172,49 @@ def preprocess_extrinsic(
 # 3. LiDAR → BEV occupancy grid
 # ──────────────────────────────────────────────────────
 
+# data/preprocess.py — FIXED build_bev_occupancy
+# Change 1: Add Z-height filter (CRITICAL — removes ground contamination)
+# Change 2: No other changes needed
+
 def build_bev_occupancy(
-    lidar_points: np.ndarray,
+    lidar_points: np.ndarray,       # (4, N) — x,y,z,intensity
     lidar_rotation: list,
     lidar_translation: list
 ) -> torch.Tensor:
-    """
-    Convert LiDAR 3D points into a 2D BEV occupancy grid.
-
-    Steps:
-        1. Transform points from LiDAR frame → ego car frame
-        2. Filter points that fall inside our BEV range
-        3. Convert real-world (x,y) coords → grid (row,col)
-        4. Mark those grid cells as occupied (1.0)
-
-    Args:
-        lidar_points:       (N, 4) array — x,y,z,intensity
-        lidar_rotation:     quaternion from nuScenes calib
-        lidar_translation:  [x,y,z] from nuScenes calib
-
-    Returns:
-        occupancy grid tensor of shape (BEV_H, BEV_W)
-        dtype float32, values 0.0 or 1.0
-    """
     try:
-        # ── Take only x, y, z columns ──────────────────
         points = lidar_points[:3, :].T    # (N, 3)
 
-        # ── Transform LiDAR → ego car frame ────────────
+        # Transform LiDAR → ego frame
         rot   = Quaternion(lidar_rotation).rotation_matrix
         trans = np.array(lidar_translation, dtype=np.float32)
-
-        # Apply rotation then translation
         points = (rot @ points.T).T + trans   # (N, 3)
 
-        # ── Build empty occupancy grid ──────────────────
-        occ = np.zeros(
-            (BEV_H, BEV_W), dtype=np.float32
-        )
+        # ── Z-HEIGHT FILTER (THE FIX) ──────────────────────────────
+        # In ego frame, ground is at approximately Z ≈ -ego_height ≈ -1.7m
+        # After lidar→ego transform, ground returns cluster at Z ≈ -1.5 to 0.1m
+        # Objects (cars, pedestrians) are at Z ≈ 0.2m to 3.5m in ego frame
+        z_ego = points[:, 2]
+        height_mask = (z_ego > 0.2) & (z_ego < 3.5)
+        points = points[height_mask]
+        # ──────────────────────────────────────────────────────────
 
-        # ── Resolution: metres per pixel ───────────────
-        x_res = (X_RANGE[1] - X_RANGE[0]) / BEV_W  # 0.4 m
-        y_res = (Y_RANGE[1] - Y_RANGE[0]) / BEV_H  # 0.4 m
+        occ   = np.zeros((BEV_H, BEV_W), dtype=np.float32)
+        x_res = (X_RANGE[1] - X_RANGE[0]) / BEV_W  # 0.4 m/px
+        y_res = (Y_RANGE[1] - Y_RANGE[0]) / BEV_H  # 0.4 m/px
 
-        # ── Convert real-world → grid coordinates ──────
         col = ((points[:, 0] - X_RANGE[0]) / x_res).astype(int)
         row = ((points[:, 1] - Y_RANGE[0]) / y_res).astype(int)
 
-        # ── Filter: keep only points inside grid ───────
-        mask = (
-            (col >= 0) & (col < BEV_W) &
-            (row >= 0) & (row < BEV_H)
-        )
-
-        # ── Mark occupied cells ─────────────────────────
+        mask = (col >= 0) & (col < BEV_W) & (row >= 0) & (row < BEV_H)
         occ[row[mask], col[mask]] = 1.0
 
         occupied = int(occ.sum())
         total    = BEV_H * BEV_W
         logger.info(
-            f"BEV grid built | "
-            f"occupied: {occupied}/{total} cells "
-            f"({100*occupied/total:.1f}%)"
+            f"BEV GT built | occupied: {occupied}/{total} "
+            f"({100*occupied/total:.1f}%) | after Z-filter"
         )
-
         return torch.tensor(occ, dtype=torch.float32)
 
     except Exception as e:
-        raise BEVException(
-            "Failed to build BEV occupancy grid", e
-        ) from e
+        raise BEVException("Failed to build BEV occupancy grid", e) from e

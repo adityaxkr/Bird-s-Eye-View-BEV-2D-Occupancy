@@ -45,8 +45,8 @@ BEV_H = 200    # grid height (pixels)
 BEV_W = 200    # grid width  (pixels)
 
 # Real-world range around the ego vehicle (in metres)
-X_RANGE = (-40.0, 40.0)   # left ↔ right   = 80m wide
-Y_RANGE = (-40.0, 40.0)   # front ↔ behind = 80m deep
+X_RANGE = (-40.0, 40.0)   # forward ↔ behind = 80m longitudinal
+Y_RANGE = (-40.0, 40.0)   # left    ↔ right  = 80m lateral
 Z_RANGE = (-1.0,  5.4)    # below ↔ above  = 6.4m tall
 
 # Resolution: how many real-world metres each pixel represents
@@ -55,7 +55,6 @@ BEV_RES = (X_RANGE[1] - X_RANGE[0]) / BEV_W   # 0.4 m/px
 
 # ── Model Architecture ─────────────────────────────────
 IMG_CHANNELS  = 128    # feature channels from backbone
-DEPTH_BINS    = 64     # how many depth levels LSS predicts
 BEV_CHANNELS  = 64     # channels inside BEV decoder
 
 # ── Training ───────────────────────────────────────────
