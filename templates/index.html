@@ -1,317 +1,469 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"/>
-  <title>BEV Occupancy Predictor</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <link href="/static/css/style.css" rel="stylesheet"/>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BEV-NET // Occupancy Intelligence</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@300;400;500;600;700&family=Exo+2:ital,wght@0,100..900;1,100..900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/demo.css">
 </head>
 <body>
 
-<!-- Header -->
-<header class="app-header">
-  <div class="brand">
-    <span class="logo">🚗</span>
-    <div>
-      <h1>BEV Occupancy Predictor</h1>
-      <p class="subtitle">
-        MAHE Mobility Hackathon 2026 — Problem Statement 3
-      </p>
-    </div>
-  </div>
-  <div class="model-badge" id="model-badge">
-    Loading model...
-  </div>
-</header>
+<!-- SCANLINE OVERLAY -->
+<div class="scanlines"></div>
+<div class="noise-overlay"></div>
 
-<!-- Navigation -->
-<nav class="tab-nav">
-  <button class="tab-btn active" data-tab="sample">
-    📷 Sample Browser
-  </button>
-  <button class="tab-btn" data-tab="video">
-    🎥 Video Upload
-  </button>
-  <button class="tab-btn" data-tab="about">
-    ℹ️ About
-  </button>
-</nav>
+<!-- ANIMATED GRID BACKGROUND -->
+<div class="grid-bg"></div>
 
-<main class="container">
+<div class="container">
 
-  <!-- ══ Tab 1: Sample Browser ══ -->
-  <section id="tab-sample" class="tab-panel active">
-    <div class="two-col">
-
-      <!-- Left: Input -->
-      <div class="panel">
-        <h2>📥 Input</h2>
-
-        <div class="sample-select">
-          <label>Select nuScenes Sample</label>
-          <select id="sample-select">
-            <option>Loading samples...</option>
-          </select>
-          <button
-            id="btn-predict"
-            class="btn primary"
-            onclick="predictSample()"
-          >
-            🔍 Predict BEV
-          </button>
+    <!-- ═══════════════════════════════════════ HEADER ═══ -->
+    <header>
+        <div class="header-top-bar">
+            <span class="status-dot pulsing"></span>
+            <span class="mono">SYS:ONLINE</span>
+            <span class="divider-v"></span>
+            <span class="mono">MODEL:BEV-OCCNET-v2.1</span>
+            <span class="divider-v"></span>
+            <span class="mono" id="live-time"></span>
         </div>
 
-        <div class="cam-label">6 Camera Inputs</div>
-        <div class="cam-grid" id="cam-grid">
-          <div class="cam-placeholder">
-            Select a sample to view cameras
-          </div>
+        <div class="header-main">
+            <div class="logo-mark">
+                <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+                    <polygon points="24,2 46,13 46,35 24,46 2,35 2,13" fill="none" stroke="#00d4ff" stroke-width="1.5"/>
+                    <polygon points="24,10 38,17 38,31 24,38 10,31 10,17" fill="none" stroke="#00d4ff" stroke-width="0.8" opacity="0.5"/>
+                    <circle cx="24" cy="24" r="4" fill="#00d4ff"/>
+                    <line x1="24" y1="10" x2="24" y2="38" stroke="#00d4ff" stroke-width="0.5" opacity="0.4"/>
+                    <line x1="10" y1="17" x2="38" y2="31" stroke="#00d4ff" stroke-width="0.5" opacity="0.4"/>
+                    <line x1="38" y1="17" x2="10" y2="31" stroke="#00d4ff" stroke-width="0.5" opacity="0.4"/>
+                </svg>
+            </div>
+            <div class="header-text">
+                <div class="header-eyebrow"><span class="mono">360° MULTI-CAMERA PERCEPTION</span></div>
+                <h1>BEV<span class="accent-slash">/</span>NET</h1>
+                <p class="header-sub">Bird's Eye View Occupancy Intelligence Network</p>
+            </div>
+            <div class="header-stats">
+                <div class="hstat">
+                    <div class="hstat-val">200×200</div>
+                    <div class="hstat-label">GRID RES</div>
+                </div>
+                <div class="hstat">
+                    <div class="hstat-val">0.4m</div>
+                    <div class="hstat-label">CELL SIZE</div>
+                </div>
+                <div class="hstat">
+                    <div class="hstat-val">80m</div>
+                    <div class="hstat-label">RANGE</div>
+                </div>
+                <div class="hstat">
+                    <div class="hstat-val">6×</div>
+                    <div class="hstat-label">CAMERAS</div>
+                </div>
+            </div>
         </div>
-      </div>
+    </header>
 
-      <!-- Right: Output -->
-      <div class="panel">
-        <h2>🗺️ BEV Prediction</h2>
-
-        <div class="bev-tabs">
-          <button
-            class="bev-tab active"
-            onclick="showBEV('pred', this)"
-          >
-            Predicted
-          </button>
-          <button
-            class="bev-tab"
-            onclick="showBEV('gt', this)"
-          >
-            Ground Truth
-          </button>
-          <button
-            class="bev-tab"
-            onclick="showBEV('error', this)"
-          >
-            Error Map
-          </button>
+    <!-- ═══════════════════════════════════════ MODE SELECTOR ═══ -->
+    <div class="mode-selector">
+        <div class="mode-label mono">// SELECT OPERATING MODE</div>
+        <div class="mode-tabs">
+            <button class="tab active" onclick="setMode('dataset')" id="tab-dataset">
+                <div class="tab-icon">⬡</div>
+                <div class="tab-content">
+                    <span class="tab-title">DATASET BROWSER</span>
+                    <span class="tab-sub">nuScenes Validation</span>
+                </div>
+            </button>
+            <button class="tab" onclick="setMode('random')" id="tab-random">
+                <div class="tab-icon">◈</div>
+                <div class="tab-content">
+                    <span class="tab-title">FEATURED SCENES</span>
+                    <span class="tab-sub">Hand-picked Highlights</span>
+                </div>
+            </button>
+            <button class="tab" onclick="setMode('upload')" id="tab-upload">
+                <div class="tab-icon">⬆</div>
+                <div class="tab-content">
+                    <span class="tab-title">CUSTOM UPLOAD</span>
+                    <span class="tab-sub">Your Camera Array</span>
+                </div>
+            </button>
         </div>
-
-        <div class="bev-display" id="bev-display">
-          <div class="bev-placeholder">
-            Run prediction to see BEV map
-          </div>
-        </div>
-
-        <div class="slider-row">
-          <label>
-            Threshold:
-            <span id="thresh-val">0.5</span>
-          </label>
-          <input
-            type="range"
-            id="threshold"
-            min="0.1" max="0.9"
-            step="0.05" value="0.5"
-            oninput="updateThreshold(this.value)"
-          />
-        </div>
-      </div>
     </div>
 
-    <!-- Metrics -->
-    <div class="metrics-row" id="metrics-row">
-
-      <div class="metric-card">
-        <div class="metric-icon">📊</div>
-        <div class="metric-label">Occupancy IoU</div>
-        <div class="metric-value" id="m-iou">—</div>
-        <div class="metric-bar">
-          <div class="metric-fill iou" id="bar-iou"
-               style="width:0%"></div>
-        </div>
-        <div class="metric-hint">↑ higher is better</div>
-      </div>
-
-      <div class="metric-card">
-        <div class="metric-icon">📏</div>
-        <div class="metric-label">Distance-Weighted Error</div>
-        <div class="metric-value" id="m-dwe">—</div>
-        <div class="metric-bar">
-          <div class="metric-fill dwe" id="bar-dwe"
-               style="width:0%"></div>
-        </div>
-        <div class="metric-hint">↓ lower is better</div>
-      </div>
-
-      <div class="metric-card">
-        <div class="metric-icon">🟦</div>
-        <div class="metric-label">Occupancy</div>
-        <div class="metric-value" id="m-occ">—</div>
-        <canvas id="occ-chart"
-                width="100" height="100"
-                style="margin-top:8px">
-        </canvas>
-      </div>
-
-      <div class="metric-card">
-        <div class="metric-icon">⚡</div>
-        <div class="metric-label">Inference Time</div>
-        <div class="metric-value" id="m-time">—</div>
-        <div class="metric-hint">milliseconds</div>
-      </div>
-
-    </div>
-  </section>
-
-  <!-- ══ Tab 2: Video Upload ══ -->
-  <section id="tab-video" class="tab-panel">
-    <div class="panel">
-      <h2>🎥 Upload Driving Video</h2>
-      <p class="muted" style="margin-bottom:20px">
-        Upload a dashcam video — we extract frames and
-        predict BEV occupancy for each frame automatically.
-      </p>
-
-      <div
-        class="upload-area"
-        id="upload-area"
-        onclick="document.getElementById('video-input').click()"
-        ondragover="event.preventDefault()"
-        ondrop="handleDrop(event)"
-      >
-        <input
-          type="file"
-          id="video-input"
-          accept="video/*"
-          onchange="handleVideoUpload(this)"
-          style="display:none"
-        />
-        <div class="upload-icon">🎥</div>
-        <div style="font-size:15px;margin-bottom:6px">
-          Click or drag video here
-        </div>
-        <div class="muted small">
-          MP4, AVI, MOV — max 30 frames extracted
-        </div>
-      </div>
-
-      <div id="video-progress" style="display:none">
-        <div class="progress-bar">
-          <div class="progress-fill" id="progress-fill">
-          </div>
-        </div>
-        <div id="progress-text" class="muted small"
-             style="margin-top:6px">
-          Processing...
-        </div>
-      </div>
-
-      <!-- GIF output -->
-      <div id="gif-output" style="display:none;margin-top:20px">
-        <h3 style="margin-bottom:12px">
-          🎞️ Animated BEV Result
-        </h3>
-        <img id="gif-img" style="border-radius:12px;
-             max-width:100%" alt="BEV Animation"/>
-      </div>
-
-      <!-- Side by side frames -->
-      <div id="video-frames"
-           class="frames-grid"
-           style="margin-top:20px">
-      </div>
-    </div>
-  </section>
-
-  <!-- ══ Tab 3: About ══ -->
-  <section id="tab-about" class="tab-panel">
-    <div class="panel">
-      <h2>ℹ️ About this Project</h2>
-
-      <div class="about-grid">
-
-        <div class="about-card">
-          <h3>🎯 Problem Statement 3</h3>
-          <p>
-            Transform 6 camera images into a 2D
-            Bird's-Eye-View occupancy grid showing
-            obstacles and free space for Level 4
-            autonomous driving systems.
-          </p>
+    <!-- ═══════════════════════════════════════ INPUT WORKSPACE ═══ -->
+    <div class="panel" id="input-workspace">
+        <div class="panel-header">
+            <div class="panel-title">
+                <span class="panel-dot"></span>
+                <span>INPUT CONFIGURATION</span>
+            </div>
+            <div class="panel-badge mono" id="mode-badge">MODE: DATASET</div>
         </div>
 
-        <div class="about-card">
-          <h3>🧠 Architecture</h3>
-          <p>
-            <strong>ResNet50 + FPN</strong> backbone
-            → <strong>LSS</strong> view transformer
-            → <strong>FastOcc 2D FCN</strong> decoder
-            → Occupancy head
-          </p>
+        <!-- DATASET MODE -->
+        <div id="ctrl-dataset" class="control-group">
+            <label class="field-label">
+                <span class="mono label-pre">01 //</span>
+                VALIDATION SCENE SELECTOR
+            </label>
+            <div class="select-wrapper">
+                <select id="sampleSelect">
+                    <option value="">— INITIALIZING DATASET —</option>
+                </select>
+                <div class="select-arrow">▾</div>
+            </div>
         </div>
 
-        <div class="about-card">
-          <h3>📊 Training Results</h3>
-          <p>
-            Occupancy IoU:
-            <strong style="color:#7c9aff">0.2081</strong>
-            <br/>
-            Epochs: 20 | Device: T4 GPU
-            <br/>
-            Dataset: nuScenes v1.0-mini
-          </p>
+        <!-- RANDOM MODE -->
+        <div id="ctrl-random" class="control-group" style="display: none;">
+            <div class="featured-card">
+                <div class="featured-card-header">
+                    <span class="mono">FEATURED SCENE TELEMETRY</span>
+                    <button onclick="pickRandomFeatured()" class="btn-roll">
+                        <span>⟳</span> RANDOMIZE
+                    </button>
+                </div>
+                <div class="featured-stats">
+                    <div class="fstat">
+                        <div class="fstat-label mono">SCENE INDEX</div>
+                        <div class="fstat-val" id="spec-idx">——</div>
+                    </div>
+                    <div class="fstat">
+                        <div class="fstat-label mono">LOCATION ID</div>
+                        <div class="fstat-val" id="spec-loc">——</div>
+                    </div>
+                    <div class="fstat wide">
+                        <div class="fstat-label mono">SCENE DESCRIPTION</div>
+                        <div class="fstat-val" id="spec-desc">——</div>
+                    </div>
+                </div>
+            </div>
         </div>
 
-        <div class="about-card">
-          <h3>📚 Research Papers</h3>
-          <p>
-            1. "Delving into the Devils of BEV Perception"
-            — IEEE TPAMI 2023
-            <br/><br/>
-            2. "FastOcc: Accelerating 3D Occupancy
-            Prediction" — ICRA 2024
-          </p>
+        <!-- CAMERA PREVIEW -->
+        <div id="preview-section">
+            <label class="field-label" style="margin-top: 28px;">
+                <span class="mono label-pre">02 //</span>
+                CAMERA ARRAY FEED
+            </label>
+            <div class="cam-grid" id="camGrid">
+                <div class="upload-slot"><span class="cam-label">CAM_FRONT</span></div>
+                <div class="upload-slot"><span class="cam-label">CAM_F_LEFT</span></div>
+                <div class="upload-slot"><span class="cam-label">CAM_F_RIGHT</span></div>
+                <div class="upload-slot"><span class="cam-label">CAM_BACK</span></div>
+                <div class="upload-slot"><span class="cam-label">CAM_B_LEFT</span></div>
+                <div class="upload-slot"><span class="cam-label">CAM_B_RIGHT</span></div>
+            </div>
         </div>
 
-        <div class="about-card">
-          <h3>💻 GitHub Repository</h3>
-          <p>
+        <!-- UPLOAD MODE -->
+        <div id="ctrl-upload" class="control-group" style="display: none;">
+            <label class="field-label">
+                <span class="mono label-pre">02 //</span>
+                UPLOAD 6-CAMERA ARRAY
+            </label>
+            <p class="field-hint mono">nuScenes-compatible calibrated input recommended for best results</p>
             
-              href="https://github.com/nirajj12/Bird-s-Eye-View-BEV-2D-Occupancy"
-              target="_blank"
-              style="color:#7c9aff"
-            >
-              nirajj12/Bird-s-Eye-View-BEV-2D-Occupancy
-            </a>
-            <br/><br/>
-            Working code + model + results
-          </p>
+            <div class="cam-grid" id="uploadGrid">
+                <label class="drop-zone" id="dz_up_front">
+                    <input type="file" hidden id="up_front" accept="image/*">
+                    <div class="dz-inner">
+                        <div class="dz-icon">⬡</div>
+                        <div class="dz-text">CAM_FRONT</div>
+                        <div class="dz-hint">drop or click</div>
+                    </div>
+                </label>
+                <label class="drop-zone" id="dz_up_front_left">
+                    <input type="file" hidden id="up_front_left" accept="image/*">
+                    <div class="dz-inner">
+                        <div class="dz-icon">⬡</div>
+                        <div class="dz-text">CAM_F_LEFT</div>
+                        <div class="dz-hint">drop or click</div>
+                    </div>
+                </label>
+                <label class="drop-zone" id="dz_up_front_right">
+                    <input type="file" hidden id="up_front_right" accept="image/*">
+                    <div class="dz-inner">
+                        <div class="dz-icon">⬡</div>
+                        <div class="dz-text">CAM_F_RIGHT</div>
+                        <div class="dz-hint">drop or click</div>
+                    </div>
+                </label>
+                <label class="drop-zone" id="dz_up_back">
+                    <input type="file" hidden id="up_back" accept="image/*">
+                    <div class="dz-inner">
+                        <div class="dz-icon">⬡</div>
+                        <div class="dz-text">CAM_BACK</div>
+                        <div class="dz-hint">drop or click</div>
+                    </div>
+                </label>
+                <label class="drop-zone" id="dz_up_back_left">
+                    <input type="file" hidden id="up_back_left" accept="image/*">
+                    <div class="dz-inner">
+                        <div class="dz-icon">⬡</div>
+                        <div class="dz-text">CAM_B_LEFT</div>
+                        <div class="dz-hint">drop or click</div>
+                    </div>
+                </label>
+                <label class="drop-zone" id="dz_up_back_right">
+                    <input type="file" hidden id="up_back_right" accept="image/*">
+                    <div class="dz-inner">
+                        <div class="dz-icon">⬡</div>
+                        <div class="dz-text">CAM_B_RIGHT</div>
+                        <div class="dz-hint">drop or click</div>
+                    </div>
+                </label>
+            </div>
+
+            <div class="warning-bar">
+                <span class="warn-icon">⚠</span>
+                <span class="mono">CALIBRATION NOTICE — Fixed nuScenes intrinsics applied. Ground Truth metrics unavailable for custom input.</span>
+            </div>
         </div>
 
-        <div class="about-card">
-          <h3>🔑 Key Metrics</h3>
-          <p>
-            <strong>Occupancy IoU</strong> — how well
-            predicted BEV matches LiDAR ground truth
-            <br/><br/>
-            <strong>Distance-Weighted Error</strong> —
-            errors near ego vehicle penalized more
-          </p>
-        </div>
-
-      </div>
+        <!-- RUN BUTTON -->
+        <button id="runBtn" class="btn-run" onclick="runModel()" disabled>
+            <div class="btn-run-inner">
+                <span class="btn-run-icon">▶</span>
+                <span class="btn-run-text">EXECUTE INFERENCE PIPELINE</span>
+                <div class="btn-run-corners">
+                    <span class="corner tl"></span>
+                    <span class="corner tr"></span>
+                    <span class="corner bl"></span>
+                    <span class="corner br"></span>
+                </div>
+            </div>
+        </button>
     </div>
-  </section>
 
-</main>
+    <!-- ═══════════════════════════════════════ LOADING STATE ═══ -->
+    <div id="loading-overlay" class="loading-overlay hidden">
+        <div class="loading-inner">
+            <div class="loading-hex">
+                <svg width="80" height="80" viewBox="0 0 80 80">
+                    <polygon class="hex-spin" points="40,4 76,22 76,58 40,76 4,58 4,22" fill="none" stroke="#00d4ff" stroke-width="1.5"/>
+                    <polygon points="40,16 64,29 64,55 40,68 16,55 16,29" fill="none" stroke="#00d4ff" stroke-width="0.8" opacity="0.4"/>
+                    <circle cx="40" cy="40" r="6" fill="#00d4ff" class="core-pulse"/>
+                </svg>
+            </div>
+            <div class="loading-text mono" id="loading-msg">EXTRACTING MULTI-SCALE FEATURES...</div>
+            <div class="loading-bar"><div class="loading-bar-fill" id="loading-bar-fill"></div></div>
+            <div class="loading-steps">
+                <span class="lstep done" id="ls1">✓ IMG ENCODE</span>
+                <span class="lstep" id="ls2">◌ BEV POOL</span>
+                <span class="lstep" id="ls3">◌ OCCUPANCY DECODE</span>
+                <span class="lstep" id="ls4">◌ METRICS</span>
+            </div>
+        </div>
+    </div>
 
-<!-- Footer -->
-<footer class="app-footer">
-  <div>MAHE Mobility Hackathon 2026 — Track 01, PS3</div>
-  <div class="tiny">
-    BEV 2D Occupancy | nuScenes CC BY-NC-SA 4.0
-  </div>
-</footer>
+    <!-- ═══════════════════════════════════════ OUTPUT ═══ -->
+    <div class="panel hidden" id="output-section">
+        <div class="panel-header">
+            <div class="panel-title">
+                <span class="panel-dot active"></span>
+                <span>PERCEPTION OUTPUT</span>
+            </div>
+            <div class="output-meta mono">
+                <span>80m × 80m COVERAGE</span>
+                <span class="divider-v"></span>
+                <span>200×200 @ 0.4m/cell</span>
+            </div>
+        </div>
 
-<script src="/static/js/script.js"></script>
+        <!-- THRESHOLD CONTROL -->
+        <div class="threshold-bar">
+            <div class="thresh-left">
+                <span class="thresh-label">DECISION THRESHOLD</span>
+                <span class="thresh-val mono" id="threshVal">0.80</span>
+            </div>
+            <div class="thresh-slider-wrap">
+                <input type="range" id="threshSlider" min="0.01" max="0.99" step="0.01" value="0.80">
+                <div class="slider-track-fill" id="slider-track-fill"></div>
+            </div>
+            <div class="thresh-right">
+                <label class="toggle-wrap">
+                    <input type="checkbox" id="toggleRings" checked>
+                    <span class="toggle-track"></span>
+                    <span class="toggle-label mono">RANGE RINGS</span>
+                </label>
+            </div>
+        </div>
+
+        <!-- CANVAS GRID -->
+        <div class="results-grid">
+            <!-- HEATMAP -->
+            <div class="canvas-panel">
+                <div class="canvas-header">
+                    <div class="canvas-title">
+                        <span class="ctitle-dot" style="background:#00d4ff"></span>
+                        PROBABILITY HEATMAP
+                    </div>
+                    <div class="canvas-sub mono">OCCUPANCY CONFIDENCE FIELD</div>
+                </div>
+                <div class="canvas-frame">
+                    <canvas id="canvasHeatmap" width="400" height="400" class="bev-canvas"></canvas>
+                    <div class="canvas-corner-tl"></div>
+                    <div class="canvas-corner-tr"></div>
+                    <div class="canvas-corner-bl"></div>
+                    <div class="canvas-corner-br"></div>
+                </div>
+                <div class="color-scale-legend">
+                    <span class="mono">FREE</span>
+                    <div class="gradient-bar"></div>
+                    <span class="mono">OCCUPIED</span>
+                </div>
+            </div>
+
+            <!-- BINARY MAP -->
+            <div class="canvas-panel">
+                <div class="canvas-header">
+                    <div class="canvas-title">
+                        <span class="ctitle-dot" style="background:#f97316"></span>
+                        BINARY / ERROR ANALYSIS
+                    </div>
+                    <div class="canvas-sub mono">PREDICTION vs GROUND TRUTH</div>
+                </div>
+                <div class="canvas-frame">
+                    <canvas id="canvasBinary" width="400" height="400" class="bev-canvas"></canvas>
+                    <div class="canvas-corner-tl"></div>
+                    <div class="canvas-corner-tr"></div>
+                    <div class="canvas-corner-bl"></div>
+                    <div class="canvas-corner-br"></div>
+                </div>
+                <div class="legend" id="errorLegend">
+                    <div class="legend-item"><span class="dot tp"></span><span>TRUE POSITIVE</span></div>
+                    <div class="legend-item"><span class="dot fp"></span><span>FALSE ALARM</span></div>
+                    <div class="legend-item"><span class="dot fn"></span><span>MISSED</span></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- METRICS PANEL -->
+        <div class="metrics-wrapper" id="metricsPanel">
+            <div class="metrics-header">
+                <span class="mono">// PERFORMANCE METRICS</span>
+                <span class="metrics-note mono">Live-updated with threshold</span>
+            </div>
+            <div class="metrics-grid">
+                <div class="metric-card" id="mc_iou">
+                    <div class="mc-label">OCCUPANCY IoU</div>
+                    <div class="mc-val" id="val_iou">—.——</div>
+                    <div class="mc-bar-bg"><div class="mc-bar-fill" id="bar_iou" style="background: linear-gradient(90deg, #00d4ff, #0099bb);"></div></div>
+                    <div class="mc-desc">Intersection / Union of occupied cells</div>
+                </div>
+                <div class="metric-card" id="mc_dwe">
+                    <div class="mc-label">DIST-WEIGHTED ERROR ↓</div>
+                    <div class="mc-val" id="val_dwe">—.——</div>
+                    <div class="mc-bar-bg"><div class="mc-bar-fill" id="bar_dwe" style="background: linear-gradient(90deg, #a855f7, #7c3aed);"></div></div>
+                    <div class="mc-desc">Near-ego errors penalized more heavily</div>
+                </div>
+                <div class="metric-card" id="mc_prec">
+                    <div class="mc-label">PRECISION</div>
+                    <div class="mc-val" id="val_prec">—.——</div>
+                    <div class="mc-bar-bg"><div class="mc-bar-fill" id="bar_prec" style="background: linear-gradient(90deg, #3b82f6, #1d4ed8);"></div></div>
+                    <div class="mc-desc">TP / (TP + FP)</div>
+                </div>
+                <div class="metric-card" id="mc_rec">
+                    <div class="mc-label">RECALL</div>
+                    <div class="mc-val" id="val_rec">—.——</div>
+                    <div class="mc-bar-bg"><div class="mc-bar-fill" id="bar_rec" style="background: linear-gradient(90deg, #f97316, #c2410c);"></div></div>
+                    <div class="mc-desc">TP / (TP + FN)</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <footer class="footer">
+        <span class="mono">BEV-NET // OCCUPANCY INTELLIGENCE SYSTEM</span>
+        <span class="divider-v"></span>
+        <span class="mono">nuScenes Dataset © Motional</span>
+        <span class="divider-v"></span>
+        <span class="mono">HACKATHON BUILD</span>
+    </footer>
+</div>
+
+<div id="bevTooltip" class="bev-tooltip hidden"></div>
+
+<script src="/static/js/demo.js"></script>
+<script>
+// Live clock
+function updateClock() {
+    const now = new Date();
+    document.getElementById('live-time').textContent = 
+        now.toUTCString().split(' ').slice(4,5).join(' ') + ' UTC';
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+// Loading sequence animation
+const loadingMessages = [
+    "EXTRACTING MULTI-SCALE IMAGE FEATURES...",
+    "PROJECTING TO BEV FRUSTUM SPACE...",
+    "RUNNING OCCUPANCY DECODER HEAD...",
+    "COMPUTING PERCEPTION METRICS..."
+];
+const loadingSteps = ['ls1', 'ls2', 'ls3', 'ls4'];
+
+window._showLoading = function() {
+    document.getElementById('loading-overlay').classList.remove('hidden');
+    let step = 0;
+    const iv = setInterval(() => {
+        if (step < loadingSteps.length) {
+            loadingSteps.forEach((id, i) => {
+                const el = document.getElementById(id);
+                if (i < step) { el.classList.add('done'); el.textContent = el.textContent.replace('◌','✓'); }
+                else if (i === step) el.classList.add('active');
+            });
+            document.getElementById('loading-msg').textContent = loadingMessages[step] || '';
+            document.getElementById('loading-bar-fill').style.width = `${(step+1)*25}%`;
+            step++;
+        } else {
+            clearInterval(iv);
+        }
+    }, 600);
+    return iv;
+};
+
+window._hideLoading = function() {
+    document.getElementById('loading-overlay').classList.add('hidden');
+    // Reset steps
+    loadingSteps.forEach(id => {
+        const el = document.getElementById(id);
+        el.classList.remove('done','active');
+        el.textContent = ['✓ IMG ENCODE','◌ BEV POOL','◌ OCCUPANCY DECODE','◌ METRICS'][loadingSteps.indexOf(id)];
+    });
+    document.getElementById('loading-bar-fill').style.width = '0%';
+};
+
+// Update mode badge
+const modeNames = { dataset: 'MODE: DATASET BROWSER', random: 'MODE: FEATURED SCENES', upload: 'MODE: CUSTOM UPLOAD' };
+const _origSetMode = window.setMode;
+document.addEventListener('DOMContentLoaded', () => {
+    const originalSetMode = window.setMode;
+    if (originalSetMode) {
+        window.setMode = function(mode) {
+            originalSetMode(mode);
+            document.getElementById('mode-badge').textContent = modeNames[mode] || mode.toUpperCase();
+        };
+    }
+});
+
+// Patch runModel to show loading overlay
+document.addEventListener('DOMContentLoaded', () => {
+    const _origRun = window.runModel;
+    if (_origRun) {
+        window.runModel = async function() {
+            window._showLoading();
+            try { await _origRun(); } finally { window._hideLoading(); }
+        };
+    }
+});
+</script>
 </body>
 </html>

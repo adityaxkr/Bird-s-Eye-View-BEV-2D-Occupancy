@@ -7,7 +7,7 @@
 import torch
 import numpy as np
 
-from config.config import BEV_H, BEV_W
+from config.config import BEV_H, BEV_W, THRESHOLD
 from logger.custom_logger import CustomLogger
 from exception.custom_exception import BEVException
 
@@ -21,7 +21,7 @@ logger = CustomLogger().get_logger(__name__)
 def occupancy_iou(
     pred:      torch.Tensor,
     gt:        torch.Tensor,
-    threshold: float = 0.5
+    threshold: float = THRESHOLD
 ) -> float:
     """
     Occupancy IoU — PRIMARY hackathon metric.
@@ -115,7 +115,8 @@ def distance_weighted_error(
 
 def compute_metrics(
     pred: torch.Tensor,
-    gt:   torch.Tensor
+    gt:   torch.Tensor,
+    threshold: float = THRESHOLD
 ) -> dict:
     """
     Compute all hackathon metrics.
@@ -124,7 +125,7 @@ def compute_metrics(
     if gt.dim() == 3:
         gt = gt.unsqueeze(1)
 
-    iou = occupancy_iou(pred, gt)
+    iou = occupancy_iou(pred, gt, threshold=threshold)
     dwe = distance_weighted_error(pred, gt)
 
     # ✅ FIX: debug not info — called per sample during validation
