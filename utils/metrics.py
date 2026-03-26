@@ -82,53 +82,29 @@ def _build_distance_weight_map(
 
 def distance_weighted_error(
     pred: torch.Tensor,
-    gt:   torch.Tensor
+    gt: torch.Tensor,
+    threshold: float = 0.80   # use your tuned threshold
 ) -> float:
-    """
-    Distance-Weighted Error — SECONDARY hackathon metric.
-    Accepts raw logits — sigmoid applied internally.
-
-    Formula: DWE = Σ weight(r,c) × |pred_prob(r,c) - gt(r,c)|
-    Returns: float — lower is better
-    """
     try:
         pred = pred.squeeze(1) if pred.dim() == 4 else pred
-        gt   = gt.squeeze(1)   if gt.dim() == 4   else gt
+        gt   = gt.squeeze(1)   if gt.dim()   == 4 else gt
+        B, H, W = pred.shape
 
-        B, H, W    = pred.shape
         pred_probs = torch.sigmoid(pred)
+        pred_bin   = (pred_probs >= threshold).float()  # ← binarize first
+        gt_bin     = (gt >= 0.5).float()
 
-        weight   = _build_distance_weight_map(H, W, device=pred.device)
-        error    = (pred_probs - gt).abs()
+        weight  = _build_distance_weight_map(H, W, device=pred.device)
+        error   = torch.abs(pred_bin - gt_bin)          # ← binary error
         weighted = error * weight.unsqueeze(0)
-        dwe      = weighted.sum(dim=[1, 2]).mean().item()
-
+        dwe = weighted.sum(dim=[1, 2]).mean().item()
         return dwe
-
     except Exception as e:
         raise BEVException("Failed to compute DWE", e) from e
-
-
-# ──────────────────────────────────────────────────────
-# Combined metrics
-# ──────────────────────────────────────────────────────
-
-def compute_metrics(
-    pred: torch.Tensor,
-    gt:   torch.Tensor,
-    threshold: float = THRESHOLD
-) -> dict:
-    """
-    Compute all hackathon metrics.
-    Accepts raw logits — sigmoid applied internally.
-    """
+def compute_metrics(pred, gt, threshold: float = 0.80) -> dict:
     if gt.dim() == 3:
         gt = gt.unsqueeze(1)
-
     iou = occupancy_iou(pred, gt, threshold=threshold)
-    dwe = distance_weighted_error(pred, gt)
-
-    # ✅ FIX: debug not info — called per sample during validation
+    dwe = distance_weighted_error(pred, gt, threshold=threshold)
     logger.debug(f"Metrics | Occ IoU: {iou:.4f} | DWE: {dwe:.6f}")
-
     return {'occ_iou': iou, 'dwe': dwe}

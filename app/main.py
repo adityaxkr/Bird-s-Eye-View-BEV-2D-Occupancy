@@ -43,7 +43,8 @@ except:
     print("Warning: fixed_K.npy or fixed_E.npy not found.")
     FIXED_K, FIXED_E = None, None
 
-FEATURED_INDICES = [80, 103, 82, 104, 116]
+# Added indices: 326 (Rain/Night), 14 (Construction), 135 (Parking Lot)
+FEATURED_INDICES = [80, 103, 82, 104, 116, 326, 14, 135]
 
 def tensor_to_b64(t):
     img_np = t.cpu().numpy()

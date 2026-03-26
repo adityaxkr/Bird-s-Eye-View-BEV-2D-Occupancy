@@ -31,38 +31,47 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 function populateDropdown() {
     const select = document.getElementById('sampleSelect');
+    const featuredSelect = document.getElementById('featuredSelect'); // NEW Dropdown
+    
     select.innerHTML = '<option value="">— SELECT A SCENE —</option>';
+    if (featuredSelect) featuredSelect.innerHTML = '<option value="">— CHOOSE A SPECIFIC SCENARIO —</option>';
 
-    const groupFeatured = document.createElement('optgroup');
-    groupFeatured.label = '── FEATURED SCENES ──';
-
+    // 1. Populate Dataset Browser (Tab 1) - ONLY regular scenes
+    const regularSamples = allSamples.filter(s => !s.featured);
     const groupAll = document.createElement('optgroup');
-    groupAll.label = `── nuScenes VALIDATION (${allSamples.length} SAMPLES) ──`;
+    groupAll.label = `── nuScenes VALIDATION (${regularSamples.length} SAMPLES) ──`;
 
-    const featuredLabels = {
-        80:  "Dense Traffic Scene    ← hand-picked best",
-        103: "Open Road Scene        ← far-field showcase",
-        82:  "Pedestrian Scene       ← near-ego accuracy",
-        104: "Urban Intersection     ← complex geometry",
-        116: "Highway Merge          ← high-speed tracking"
-    };
-
-    allSamples.forEach(s => {
+    regularSamples.forEach(s => {
         const opt = document.createElement('option');
         opt.value = s.index;
-        if (s.featured) {
-            opt.textContent = `★  ${featuredLabels[s.index] || "Featured Scene"}`;
-            groupFeatured.appendChild(opt);
-        } else {
-            const sceneNum = s.scene_name.replace('scene-', '');
-            const desc = s.description ? s.description.substring(0, 45) + (s.description.length > 45 ? '…' : '') : 'Standard Drive';
-            opt.textContent = `SCN-${sceneNum} — ${desc}`;
-            groupAll.appendChild(opt);
-        }
+        
+        // Format the label nicely for regular scenes
+        const sceneNum = s.scene_name.replace('scene-', '');
+        const desc = s.description ? s.description.substring(0, 45) + (s.description.length > 45 ? '…' : '') : 'Standard Drive';
+        opt.textContent = `SCN-${sceneNum} — ${desc}`;
+        
+        groupAll.appendChild(opt);
     });
-
-    select.appendChild(groupFeatured);
     select.appendChild(groupAll);
+
+    // 2. Populate Featured Scenes (Tab 2) - ONLY featured scenes
+    const featuredLabels = {
+        80:  "Dense Traffic Scene",
+        103: "Open Road Showcase",
+        82:  "Pedestrian Interaction",
+        104: "Complex Urban Intersection",
+        116: "High-Speed Highway Merge",
+        326: "Night & Rain (Adverse Weather)", // SCN-1094
+        14:  "Construction Zone Evasion",      // SCN-0061
+        135: "Parking Lot Navigation"          // SCN-0655
+    };
+
+    featuredSamples.forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s.index;
+        opt.textContent = `★ ${featuredLabels[s.index] || "Featured Scene"}`;
+        if (featuredSelect) featuredSelect.appendChild(opt);
+    });
 }
 
 // --- 2. MODE SWITCHING ---
@@ -99,13 +108,39 @@ document.getElementById('sampleSelect').addEventListener('change', (e) => {
     else clearGrid();
 });
 
+// Event Listener for the NEW Featured Dropdown
+const fSelectElement = document.getElementById('featuredSelect');
+if (fSelectElement) {
+    fSelectElement.addEventListener('change', (e) => {
+        const idx = e.target.value;
+        if (idx) {
+            const s = featuredSamples.find(x => x.index == idx);
+            if (s) {
+                selectedIdx = s.index;
+                document.getElementById('spec-idx').textContent = s.index;
+                document.getElementById('spec-loc').textContent = s.scene_name;
+                document.getElementById('spec-desc').textContent = s.description || "N/A";
+                loadCameraImages(selectedIdx);
+            }
+        } else {
+            clearGrid();
+        }
+    });
+}
+
 function pickRandomFeatured() {
     if (!featuredSamples.length) return;
     const s = featuredSamples[Math.floor(Math.random() * featuredSamples.length)];
     selectedIdx = s.index;
+    
     document.getElementById('spec-idx').textContent = s.index;
     document.getElementById('spec-loc').textContent = s.scene_name;
     document.getElementById('spec-desc').textContent = s.description || "N/A";
+    
+    // Make the new dropdown match the randomly picked scene
+    const fSelect = document.getElementById('featuredSelect');
+    if (fSelect) fSelect.value = s.index;
+    
     loadCameraImages(selectedIdx);
 }
 
@@ -216,7 +251,7 @@ async function runModel() {
                 <div class="legend-item"><span class="dot fn"></span><span>MISSED</span></div>
             `;
 
-            // DWE from server
+            // DWE from server initially
             document.getElementById('val_dwe').textContent = data.metrics.dwe.toFixed(4);
             document.getElementById('bar_dwe').style.width = `${Math.max(100 - (data.metrics.dwe * 100), 0)}%`;
 
@@ -264,23 +299,46 @@ document.getElementById('toggleRings').addEventListener('change', () => {
 
 function recalculateLiveMetrics(probGrid, thresh, gtGrid) {
     let tp = 0, fp = 0, fn = 0;
+    
+    // Variables for Live DWE math
+    let dweErrorSum = 0;
+    let totalWeight = 0;
     const size = probGrid.length;
+    const cx = size / 2;
+    const cy = size / 2;
+
     for (let y = 0; y < size; y++) {
         for (let x = 0; x < size; x++) {
             const pred = probGrid[y][x] > thresh ? 1 : 0;
             const gt   = gtGrid[y][x];
+            
+            // Standard Metrics
             if (pred === 1 && gt === 1) tp++;
             else if (pred === 1 && gt === 0) fp++;
             else if (pred === 0 && gt === 1) fn++;
+
+            // DWE Math: Distance from Ego
+            const dist = Math.max(1.0, Math.sqrt(Math.pow(x - cx, 2) + Math.pow(y - cy, 2)));
+            const weight = 1.0 / dist;
+            totalWeight += weight;
+
+            // If model prediction is wrong, add heavily weighted penalty
+            if (pred !== gt) {
+                dweErrorSum += weight;
+            }
         }
     }
+    
     const iou  = tp / (tp + fp + fn + 1e-6);
     const prec = tp / (tp + fp + 1e-6);
     const rec  = tp / (tp + fn + 1e-6);
+    const dwe  = dweErrorSum / totalWeight; // Final Corrected DWE
 
+    // Update the UI cards instantly
     updateMetricCard('iou',  iou);
     updateMetricCard('prec', prec);
     updateMetricCard('rec',  rec);
+    updateMetricCard('dwe',  dwe); 
 }
 
 function updateMetricCard(id, val) {
