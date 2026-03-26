@@ -376,14 +376,37 @@ This section highlights how the six-camera input is transformed into a BEV occup
 
 ---
 
-## 🧑‍💻 Author
+## Contributors
 
-**Niraj Kumar – AIML Engineer**  
-GitHub: https://github.com/nirajj12  
-Linkedin:https://www.linkedin.com/in/niraj-kumar-8255111b8/
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <h3>Niraj Kumar</h3>
+      <p>AIML Engineer</p>
+      <p>
+        <a href="https://github.com/nirajj12">
+          <img src="https://img.shields.io/badge/GitHub-nirajj12-181717?style=for-the-badge&logo=github" alt="Niraj Kumar GitHub" />
+        </a>
+        <br />
+        <a href="https://www.linkedin.com/in/niraj-kumar-8255111b8/">
+          <img src="https://img.shields.io/badge/LinkedIn-Niraj%20Kumar-0A66C2?style=for-the-badge&logo=linkedin" alt="Niraj Kumar LinkedIn" />
+        </a>
+      </p>
+    </td>
+    <td align="center" width="50%">
+      <h3>Aditya Kumar</h3>
+      <p>Contributor</p>
+      <p>
+        <a href="https://github.com/adityaxkr">
+          <img src="https://img.shields.io/badge/GitHub-adityaxkr-181717?style=for-the-badge&logo=github" alt="Aditya Kumar GitHub" />
+        </a>
+        <br />
+        <a href="https://www.linkedin.com/in/adityaxkr/">
+          <img src="https://img.shields.io/badge/LinkedIn-Aditya%20Kumar-0A66C2?style=for-the-badge&logo=linkedin" alt="Aditya Kumar LinkedIn" />
+        </a>
+      </p>
+    </td>
+  </tr>
+</table>
 
-**Aditya Kumar**  
-GitHub: https://github.com/adityaxkr 
-Linkedin:https://www.linkedin.com/in/adityaxkr/ 
-
-⭐ If you found this project useful, consider starring the repository!
+⭐ If this project helped you, consider starring the repository.
