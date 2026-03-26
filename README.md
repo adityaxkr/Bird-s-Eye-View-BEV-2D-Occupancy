@@ -421,22 +421,6 @@ The FastAPI demo includes a cinematic BEV-style interface for scene selection, m
 
 ---
 
-## 12. Notes for Submission
-
-This repository satisfies all Manipal GitHub submission requirements:
-
-- ✅ Project overview
-- ✅ Model architecture
-- ✅ Dataset used
-- ✅ Setup & installation instructions
-- ✅ How to run the code
-- ✅ Example outputs / results
-
-Repository is **publicly accessible** at:  
-https://github.com/nirajj12/Bird-s-Eye-View-BEV-2D-Occupancy
-
----
-
 ## Contributors
 
 <table>
