@@ -381,8 +381,8 @@ This section highlights how the six-camera input is transformed into a BEV occup
 <table>
   <tr>
     <td align="center" width="50%">
-      <h3>Niraj Kumar</h3>
-      <p>AIML Engineer</p>
+      <h3>🧑‍🎓 Niraj Kumar</h3>
+      <p>AI/ML Engineer</p>
       <p>
         <a href="https://github.com/nirajj12">
           <img src="https://img.shields.io/badge/GitHub-nirajj12-181717?style=for-the-badge&logo=github" alt="Niraj Kumar GitHub" />
@@ -394,8 +394,8 @@ This section highlights how the six-camera input is transformed into a BEV occup
       </p>
     </td>
     <td align="center" width="50%">
-      <h3>Aditya Kumar</h3>
-      <p>Contributor</p>
+      <h3>🧑‍🎓 Aditya Kumar</h3>
+      <p>AI/ML Engineer</p>
       <p>
         <a href="https://github.com/adityaxkr">
           <img src="https://img.shields.io/badge/GitHub-adityaxkr-181717?style=for-the-badge&logo=github" alt="Aditya Kumar GitHub" />
