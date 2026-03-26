@@ -326,9 +326,19 @@ Add example images in an `assets/` folder and reference them like this:
 
 ## 11. Acknowledgments
 
+- **Hackathon**: Built for the **MAHE Mobility Challenge – Autonomous Mobility Hackathon**  
 - **Dataset**: nuScenes mini  
 - **Frameworks**: PyTorch and FastAPI  
 - **Focus Area**: Multi-camera BEV occupancy prediction and visualization  
 
 ---
 
+## 🧑‍💻 Author
+
+**Niraj Kumar – AIML Engineer**  
+GitHub: https://github.com/nirajj12  
+
+**Aditya Kumar**  
+GitHub: https://github.com/adityaxkr  
+
+⭐ If you found this project useful, consider starring the repository!
