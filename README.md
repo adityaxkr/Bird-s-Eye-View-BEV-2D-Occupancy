@@ -14,6 +14,7 @@
 📊 **Dataset Used**: **nuScenes mini**  
 🧠 **Core Goal**: Predict a 2D Bird's-Eye View occupancy map from 6 surround-view cameras  
 🎯 **Best Validation IoU**: **0.3649**  
+🚗 **Near-Ego IoU**: **0.6278** *(safety-critical zone)*  
 📉 **DWE**: **0.1137** (51% better than baseline)  
 🏁 **Built for**: MAHE Mobility Challenge – Centre of Excellence in Autonomous Mobility, MIT Bengaluru
 
@@ -110,22 +111,15 @@ We made the training loss **mathematically identical** to the evaluation metric.
 
 **Solution 3 — Phased Training Curriculum**
 ```
-Epochs  1– 5:  Warmup   → focal + dice only        (learn basic occupancy shapes)
-Epochs  6–40:  Phase 1  → + DWE + confidence + TV  (learn spatial priority)
-Epochs 41–60:  Phase 2  → amplified DWE weights     (refine near-ego accuracy)
+Warmup   → focal + dice only         (learn basic occupancy shapes)
+Phase 1  → + DWE + confidence + TV   (learn spatial priority)
+Phase 2  → amplified DWE weighting    (refine near-ego accuracy)
 ```
-Adding all losses from epoch 1 caused collapse. The curriculum gives the model a stable foundation before applying spatial pressure.
+Adding all losses from the start caused collapse. The curriculum gives the model a stable foundation before applying spatial pressure.
 
 **Result:** IoU **0.3649**, DWE **0.1137** — 21% IoU gain and 51% DWE reduction over the geometry projection baseline.
 
 ---
-
-### Final Architecture Components
-
-- **ImageBackbone** — Shared CNN backbone applied to each of the 6 camera views
-- **BEVFormerLite** — Geometry-aware view transformer, samples at Z = [0.0, 0.5, 1.5]
-- **BEVDecoder** — 2D BEV refinement that upsamples and smooths the BEV feature map
-- **OccupancyHead** — Produces main occupancy logits and auxiliary logits
 
 ### Inputs and Outputs
 
@@ -158,7 +152,7 @@ flowchart LR
     D --> E[Best Checkpoint]
 ```
 
-**Code Modules**
+**Reference implementation**
 - `models/backbone.py` · `models/bev_former_lite.py` · `models/bev_decoder.py` · `models/bev_model.py`
 
 ---
@@ -229,7 +223,6 @@ python train.py
 | Learning rate | `2e-4` |
 | Weight decay | `1e-4` |
 | Scheduler | Cosine Annealing LR |
-| Epochs | 60 |
 | Gradient clipping | Enabled |
 
 **Loss components**: Focal · Dice · Auxiliary BCE · DWE · Confidence regularization · TV regularization
@@ -267,12 +260,12 @@ The FastAPI demo includes a cinematic BEV-style interface for scene selection, m
 
 ### 6.2 Results as a Story
 
-> **IoU improved across each iteration: LSS (~0.17, plateau ep.7) → Geometry Projection (0.30) → Spatial Geometry + DWE Loss (0.36, +21%). The most critical improvement was DWE dropping from 0.23 to 0.11 — a 51% reduction in safety-critical near-ego error.**
+> **IoU improved across each iteration: LSS (~0.17, plateau ep.7) → Geometry Projection (0.30) → Spatial Geometry + DWE Loss (0.36, +21%). The most critical improvement was DWE dropping from 0.2323 to 0.1137 — a 51% reduction in safety-critical near-ego error.**
 
 | | LSS Transformer | Geometry Projection | Spatial Geometry + DWE Loss (Ours) |
 |---|---:|---:|---:|
 | **Overall IoU** | ~0.17 *(plateau ep.7)* | 0.3011 | **0.3649** |
-| **DWE** | — | 0.2323 | **0.1137** |
+| **DWE** | 0.778558 | 0.2323 | **0.1137** |
 | **Precision** | — | 0.4369 | **0.4520** |
 | **Recall** | — | 0.5218 | **0.6110** |
 | **F1 Score** | — | 0.4734 | **0.5146** |
@@ -297,6 +290,8 @@ The FastAPI demo includes a cinematic BEV-style interface for scene selection, m
 
 ![Best validation sample](assets/readme/best_1.png)
 
+> **Why it works:** Open-road geometry, cleaner camera coverage, and denser near-ego occupancy let the model align projected image features with BEV structure very accurately.
+
 #### Random Validation Sample
 
 ![Random validation sample](assets/readme/random_1.png)
@@ -304,6 +299,8 @@ The FastAPI demo includes a cinematic BEV-style interface for scene selection, m
 #### Worst Validation Sample
 
 ![Worst validation sample](assets/readme/worst_1.png)
+
+> **Why it fails:** Sparse far-field occupancy, overlapping structures, and occlusion-heavy layout make the model confuse weak distant evidence with free space, which hurts both IoU and DWE.
 
 ---
 
@@ -400,14 +397,27 @@ The FastAPI demo includes a cinematic BEV-style interface for scene selection, m
 
 ---
 
-## 10. Future Enhancements
+## 10. What We Would Build Next
 
-- Add temporal fusion over multiple frames
-- Improve far-field occupancy accuracy (currently IoU 0.31)
-- Add Docker support for easy deployment
-- Integrate experiment tracking dashboards
-- Add explainability overlays for camera→BEV feature contributions
-- Extend from binary occupancy to richer BEV semantics (drivable area, lanes, object classes)
+### 10.1 Temporal Fusion
+
+The highest-leverage next step is temporal fusion. Right now each frame is processed independently, so an object visible half a second ago can disappear once it becomes occluded. Passing the last 3-5 BEV feature maps through a ConvLSTM or temporal attention block would give the model memory and should improve far-field stability. We expect this to move far-field IoU from **0.3150** toward **0.40+**.
+
+### 10.2 Far-Field Recall
+
+The clearest current failure mode is range sensitivity: near-ego IoU is **0.6278**, while far-field IoU drops to **0.3150**. At `0.4 m/cell`, distant vehicles occupy very few cells, so a single miss is heavily penalised. Two targeted fixes are to increase far-range positive weighting in the spatial loss and add a dedicated auxiliary head for the outer BEV ring.
+
+### 10.3 Blind-Zone Awareness
+
+Our geometry sanity checks show that some BEV cells are simply not covered by any camera ray, especially in the rear blind region. Those cells cannot be predicted reliably regardless of model size. A learned or analytic blind-zone mask would let the model suppress impossible predictions and reduce false alarms in uncovered regions.
+
+### 10.4 Semantic Occupancy
+
+The current output is binary: occupied or free. The natural extension is semantic BEV with separate channels for drivable area, vehicles, pedestrians, and static obstacles. This would require a new supervision target and a wider output head, but the backbone, projection module, and decoder can remain unchanged.
+
+### 10.5 Threshold and Confidence Calibration
+
+Validation shows that different scene densities favor different thresholds, even though `0.80` is best on average. A lightweight scene-type classifier could select thresholds dynamically per sample. In parallel, post-training temperature scaling would improve confidence calibration, making the probability maps more trustworthy for downstream planning or alert logic.
 
 ---
 
